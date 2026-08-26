@@ -1,0 +1,17 @@
+Index,Pclass,Sex,Age,Survived
+0,1,male,60,1
+1,2,male,31,0
+2,2,female,30,1
+3,3,female,31,0
+4,3,male,20,0
+5,3,female,25,0
+6,1,male,50,0
+7,3,male,2,0
+8,2,female,13,1
+9,3,female,15,1
+10,3,male,17,0
+11,1,male,45,0
+12,2,male,54,0
+13,2,male,32,1
+14,3,male,40,0
+15,1,female,35,1
