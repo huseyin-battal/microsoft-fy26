@@ -28,7 +28,6 @@ Grover Arama Algoritmasını oyuncak örneklerin ötesine taşıyıp gerçek bir
 | `src/main.qs` | Q# devresi: QROM, sorgu oracle'ı, diffuser, Grover döngüsü |
 | `data/` | Veri setleri (UCI Wine Quality, Titanic ve türetilmiş alt kümeler) |
 | `bulgular.md` | Araştırma ve deney bulgularının tamamı (Türkçe) |
-| `siralama_algoritmalari.md` | Yan araştırma: N=4096 üzerinden sıralama algoritmaları karşılaştırması |
 
 ## Kurulum ve Çalıştırma
 
@@ -83,7 +82,6 @@ Taking Grover's Search Algorithm beyond toy examples: running a multi-condition 
 | `src/main.qs` | Q# circuit: QROM, query oracle, diffuser, Grover loop |
 | `data/` | Datasets (UCI Wine Quality, Titanic and derived subsets) |
 | `bulgular.md` | Complete research and experiment findings (Turkish) |
-| `siralama_algoritmalari.md` | Side research: sorting algorithm comparison at N=4096 |
 
 ## Setup and Running
 
