@@ -107,6 +107,26 @@ df["density_q"] = (df["density"].round(4) * 10_000).round().astype(int) # k≈52
 
 **Çifte kullanım:** Bu `_q` sütunları hem counting sort'un anahtarı hem QROM qubit kodlamasının girdisidir — tek ön işleme, iki kullanım.
 
-## 10. Sonuç
+## 10. Bilinmeyen Çözüm Sayısı (M) ve BBHT Algoritması
 
-Projede benimsenen tasarım — QROM ile veri setini devreye gömme + sorgu değerlerini runtime parametre olarak gönderme — literatürdeki "doğru ama bilinen şekilde pahalı" yaklaşımın kendisi. Küçük ölçekli (16-64 satır) demo için tamamen uygun; gerçek hız kazancı beklenmiyor, amaç mekanizmayı doğru göstermek. SAT-oracle deseni, sorgu-karşılaştırma adımının maliyetini düşürebilir ama QROM'un (veri setine ait olma kontrolü) yerini almaz — ikisi tamamlayıcı, birbirinin alternatifi değil. Veri seti 4.096 satıra kırpılarak Type A→B dönüşümü yapılmalı (doğruluk için) ve `alcohol`/`density` sütunları quantize edilmeli (hem sıralama hem qubit kodlaması için).
+Grover iterasyon sayısı formülü `round(π/4 · √(N/M))` içindeki `M` (sorguyu sağlayan gerçek satır sayısı), runtime'da gelen `queries`'e bağlı olduğu için **derleme/tasarım zamanında bilinmiyor** — bu proje için M=1 (tek eşleşme) varsayıldı.
+
+**Kaynak:** Boyer, Brassard, Høyer, Tapp, [*"Tight Bounds on Quantum Searching"*](https://arxiv.org/abs/quant-ph/9605034) (1996), Bölüm 4 "Unknown number of solutions" — Grover'ın orijinal makalesine ek olarak M bilinmediğinde ne yapılacağını çözen makale (bu yüzden "BBHT" olarak anılıyor, yazarların baş harfleri).
+
+**Yanlış M tahmininin bedeli (makaledeki somut örnek):** 2²⁰ olasılık içinde tek çözüm varsa 804 iterasyon neredeyse kesin buluyor; gerçekte 4 çözüm varken AYNI 804 iterasyon, bulma olasılığını milyonda birin altına düşürüyor. Literatürde bu "soufflé problemi" olarak da anılıyor — az pişirirsen (az iterasyon) sönük, çok pişirirsen (çok iterasyon) yine söner; doğru kıvam M'ye bağlı ve fazla iterasyon genliği geri döndürüyor (tepe noktasından sonra salınım).
+
+**BBHT algoritması (M bilinmeden, katlanarak artan deneme):**
+1. `m = 1`, `λ = 6/5` sabitini belirle (1 ile 4/3 arası herhangi bir λ işe yarar).
+2. `0` ile `m-1` arasından rastgele bir `j` seç.
+3. Başlangıç eşit süperpozisyonundan itibaren **`j` kez** Grover oracle+diffuser uygula (sabit değil, denemeden denemeye değişir).
+4. Register'ı ölç.
+5. Sonuç sorguyu gerçekten sağlıyorsa → bitti.
+6. Sağlamıyorsa `m`'yi `min(λ·m, √N)` yap, 2. adıma dön.
+
+Makaledeki Lemma 2'ye göre `m ≥ 1/sin(2θ)` (θ, gerçek çözüm sayısına bağlı bir açı) olduğunda tek denemede başarı olasılığı en az `1/4`; katlanarak büyüyen `m` sayesinde gerçek M hiç bilinmeden de beklenen toplam iterasyon `O(√(N/M))` mertebesinde kalıyor — Grover'ın kare-kök hızlanması korunuyor.
+
+**Bu projeye uygulanabilirlik:** BBHT, her denemeden sonra **klasik bir karar** gerektiriyor (bulunan satır koşulu gerçekten sağlıyor mu → sağlamıyorsa yeni `j` ile devreyi tekrar çalıştır). Bu, mevcut `target.submit(program, shots=100)` tek-seferlik iş gönderimi modeliyle uyuşmuyor — her deneme ayrı bir Azure Quantum job'ı ve Python tarafında ara kontrol gerektirir. MVP kapsamında bu ek karmaşıklık gereksiz görülüp M=1 sabit varsayımıyla devam edildi; BBHT, iş gönderim modeli adaptif hale getirilirse (döngü + ara sonuç kontrolü) sonraki bir iyileştirme adımı olarak kalıyor.
+
+## 11. Sonuç
+
+Projede benimsenen tasarım — QROM ile veri setini devreye gömme + sorgu değerlerini runtime parametre olarak gönderme — literatürdeki "doğru ama bilinen şekilde pahalı" yaklaşımın kendisi. Küçük ölçekli (16-64 satır) demo için tamamen uygun; gerçek hız kazancı beklenmiyor, amaç mekanizmayı doğru göstermek. SAT-oracle deseni, sorgu-karşılaştırma adımının maliyetini düşürebilir ama QROM'un (veri setine ait olma kontrolü) yerini almaz — ikisi tamamlayıcı, birbirinin alternatifi değil. Veri seti 4.096 satıra kırpılarak Type A→B dönüşümü yapılmalı (doğruluk için) ve `alcohol`/`density` sütunları quantize edilmeli (hem sıralama hem qubit kodlaması için). İterasyon sayısı hesaplanırken M=1 (tek eşleşme) varsayıldı; BBHT algoritması daha sağlam bir alternatif ama mevcut iş gönderim modeliyle doğrudan uyumsuz (bkz. Bölüm 10).
