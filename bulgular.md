@@ -127,6 +127,62 @@ Makaledeki Lemma 2'ye göre `m ≥ 1/sin(2θ)` (θ, gerçek çözüm sayısına 
 
 **Bu projeye uygulanabilirlik:** BBHT, her denemeden sonra **klasik bir karar** gerektiriyor (bulunan satır koşulu gerçekten sağlıyor mu → sağlamıyorsa yeni `j` ile devreyi tekrar çalıştır). Bu, mevcut `target.submit(program, shots=100)` tek-seferlik iş gönderimi modeliyle uyuşmuyor — her deneme ayrı bir Azure Quantum job'ı ve Python tarafında ara kontrol gerektirir. MVP kapsamında bu ek karmaşıklık gereksiz görülüp M=1 sabit varsayımıyla devam edildi; BBHT, iş gönderim modeli adaptif hale getirilirse (döngü + ara sonuç kontrolü) sonraki bir iyileştirme adımı olarak kalıyor.
 
-## 11. Sonuç
+## 11. QDK Derleyici Hatası: Partial Evaluation'da BigInt Desteği Yok
+
+**Belirti:** `qsharp.compile(op, queries, dataset)` çağrısı `Qdk.Qsc.PartialEval.Unexpected — unsupported LHS value: 7` hatasıyla düşüyor (7 = sorgulardan birinin `value`'su, BigInt olarak yazdırılmış).
+
+**Kök neden (kaynak koda inilerek doğrulandı, qsharp/qdk 1.31.0 ve `main`):**
+- Partial evaluator ([qsc_partial_eval/src/lib.rs:718](https://github.com/microsoft/qdk/blob/main/source/compiler/qsc_partial_eval/src/lib.rs)), ikili işlemlerde LHS tipi olarak Array/Result/Bool/Int/Double/Var/String/Pauli destekliyor — **BigInt dalı yok**; bilinmeyen tip `unsupported LHS value` hatasına düşüyor.
+- `Std.Arithmetic.ApplyIf*L` ailesi içeride **BigInt aritmetiği yapıyor**: `ApplyIfLessL` → `c + 1L`, `ApplyIfEqualL` → `BitSizeL(c)` + karşılaştırmalar. `IntAsBigInt(value)` sabiti kütüphane gövdesinde ikili işleme girdiği anda derleme patlıyor.
+- `main` branch'inde de düzeltilmemiş → sürüm yükseltme çare değil.
+
+**Hedef değiştirmek çare değil:** Hata `qsharp.compile` içinde, yerelde, Azure'a hiçbir şey gitmeden önce oluşuyor. Quantinuum'un Adaptive_RI profili de kurtarmaz — QIR'de BigInt hiçbir profilde yok, aynı partial evaluator yolu kullanılıyor. (Ayrıca Quantinuum emülatörleri kredi tüketir; `rigetti.sim.qvm` $0.)
+
+**Çözüm — BigInt'e hiç bulaşmamak:** `ApplyControlledOnInt` tamamen Int tabanlı (`ApplyPauliFromInt` + `Controlled`, kaynaktan doğrulandı), güvenli:
+- `==` / `!=`: `ApplyIfEqualL` yerine `ApplyControlledOnInt(value, X, dilim, aux)`.
+- Eşitsizlikler: koşulu sağlayan klasik değer aralığı üzerinde döngü — `x > value` için `value+1 .. 2^weight - 1` aralığındaki her `v`'ye `ApplyControlledOnInt(v, X, dilim, aux)` (`>=` → `value..max`, `<` → `0..value-1`, `<=` → `0..value`). Her taban durumunda en fazla bir değer tetiklenir → mantık doğru. Maliyet sorgu başına O(2^weight) çok-kontrollü kapı (weight≤10 için ≤1024) — QROM zaten baskın olduğundan demo için kabul edilebilir.
+
+**Not:** Bu ilk yüzeye çıkan derleme engeli — düzeltme sonrası ilk derleme testi küçük setle (`grover_titanic_16`) yapılmalı; sıradaki olası engel 6.497×119'luk QROM açılımının ölçeği.
+
+## 12. Bulut Denemeleri: Ölçek Duvarları, QAT ve QVM Servis Hatası
+
+**Ölçek duvarı 1 — yerel derleme:** 4096 satır × 119 bit konfigürasyonu `qsharp.compile`'da makineyi dondurdu (~24,5M çok-kontrollü kapı tahmini: 2 QROM × 50 iterasyon × 4096 × ~60 true bit). Asıl kısıtın derleme değil **kübit bütçesi** olduğu görüldü: toplam kübit = n + W + 1 (marker) + k (sorgu) → 12+119+1+2 = **134 kübit**, hiçbir simülatöre/QPU'ya sığmaz.
+
+**Çözüm — QROM'a sadece sorgulanan sütunlar:** Oracle yalnızca `queries`'in dokunduğu sütunları okur; kalan sütunlar ölçüm sonrası pandas `iloc` ile klasik olarak getirilir. `kolon_sirasi` 2 sütuna indirildi (fixed acidity 7 bit + quality 3 bit = W=10) → 64 satırda 24 kübit, 38.665 ccx.
+
+**Rigetti submit zinciri (hepsi $0 hedefte):**
+1. 64 satır → `QATTransformationFailed` (hata dökümünde gerçek mesaj yok, sadece config).
+2. Mini CCNOT testi → **BAŞARILI** → kapı seti sorun değil (QAT `ccx`'i kendisi ayrıştırıyor); engel ölçek.
+3. 8 satır (21 kübit, 601 ccx) → **QAT GEÇTİ**, ama QVM `lparallel: MAKE-KERNEL` Lisp hatası verdi: Azure'daki barındırılan QVM örneğinin worker thread havuzu yapılandırılmamış (QVM GitHub README'sinde sağlıklı örnek `"8192 MiB workspace and 8 workers"` raporlar). **Servis tarafı hata — istemciden çözülemez.**
+
+**Kübit sınırları (kaynaklar: [provider-quantinuum](https://learn.microsoft.com/en-us/azure/quantum/provider-quantinuum), [provider-rigetti](https://learn.microsoft.com/en-us/azure/quantum/provider-rigetti), [QVM GitHub](https://github.com/quil-lang/qvm)):**
+
+| Hedef | Kübit | Not |
+|---|---|---|
+| `quantinuum.sim.h2-1sc/h2-2sc` | 56 | Ücretsiz syntax checker, sonuç hep 0 |
+| `quantinuum.sim.h2-1e/h2-2e` | 56/32 | 56 sadece stabilizer; T kapılı devremiz için fiilen **32** |
+| `quantinuum.qpu.h2-1/h2-2` | 56 | Ücretli |
+| `rigetti.sim.qvm` | ilan edilmemiş | Bellek-sınırlı statevector; ~8 GiB ≈ **~29-30 pratik** |
+| `rigetti.qpu.cepheus-1-108q` | 108 | Ücretli; ~600 ccx'lik devre gürültüde erir |
+
+24 kübitlik devremiz kapasite olarak her yere sığıyor — Rigetti başarısızlığı kapasite değil, servis hatası.
+
+## 13. Uçtan Uca Yerel Doğrulama — BAŞARILI
+
+**`qsharp.run` imza notu:** `run(entry_expr, shots, *args)` — `shots` **ikinci pozisyonel** parametre, callable argümanlarından önce (`compile(entry_expr, *args)`'tan farklı; karıştırınca `TypeError: multiple values for 'shots'`).
+
+**Deney:** 64 satır × 2 sütun (W=10, 24 kübit, 6 Grover iterasyonu), sorgu `fixed acidity == 7.3 AND quality >= 7`, yerel simülatör, 100 shot (~1 dk 20 sn):
+
+```
+[(7, 98), (33, 1), (54, 1)]
+```
+
+**%98 olasılıkla indeks 7** — pandas klasik kontrolü aynı sorgu için `[7]` döndürdü: kuantum ve klasik cevap örtüşüyor. Rastgele seçim tabanı %1,6 olurdu; 6 iterasyonluk amplifikasyonun teorik beklentisi (~%99) ile ölçüm birebir uyumlu. **QROM + comparator + faz kickback + diffuser + iterasyon hesabı zinciri uçtan uca doğrulandı.**
+
+**Tespit edilen gizli tuzak — sütun bit sırası (endianness):** `satir_to_bits` sütun değerlerini `format(deger, "0Nb")` ile **MSB-first** yazıyor; `ApplyControlledOnInt` ise dilimi **little-endian** okuyor → comparator aslında sorgu değerinin bit-tersini arıyor. Bu deneyde sonuç etkilenmedi çünkü 73 (`1001001`) ve 7 (`111`) ikili palindrom. Düzeltme (henüz uygulanmadı): `satir_to_bits` içinde `for karakter in reversed(ikili_string)`. Uygulandıktan sonra palindrom-dışı bir değerle (örn. `fixed acidity == 7.4`, `74=1001010`) regresyon testi yapılmalı.
+
+## 14. Sonuç
 
 Projede benimsenen tasarım — QROM ile veri setini devreye gömme + sorgu değerlerini runtime parametre olarak gönderme — literatürdeki "doğru ama bilinen şekilde pahalı" yaklaşımın kendisi. Küçük ölçekli (16-64 satır) demo için tamamen uygun; gerçek hız kazancı beklenmiyor, amaç mekanizmayı doğru göstermek. SAT-oracle deseni, sorgu-karşılaştırma adımının maliyetini düşürebilir ama QROM'un (veri setine ait olma kontrolü) yerini almaz — ikisi tamamlayıcı, birbirinin alternatifi değil. Veri seti 4.096 satıra kırpılarak Type A→B dönüşümü yapılmalı (doğruluk için) ve `alcohol`/`density` sütunları quantize edilmeli (hem sıralama hem qubit kodlaması için). İterasyon sayısı hesaplanırken M=1 (tek eşleşme) varsayıldı; BBHT algoritması daha sağlam bir alternatif ama mevcut iş gönderim modeliyle doğrudan uyumsuz (bkz. Bölüm 10).
+
+**Nihai durum (bkz. Bölüm 13):** Mekanizma 64 satır × 2 sütun ölçeğinde yerel simülatörde uçtan uca doğrulandı — %98 olasılıkla doğru indeks, klasik kontrolle örtüşüyor. Bulutta çalıştırma Rigetti QVM'in servis hatasına takıldı (Bölüm 12); Quantinuum emülatörü (32 kübit) kapasite olarak uygun ama kredi tüketiyor. Bekleyen tek düzeltme: sütun bit sırası (endianness) — `reversed()` yaması ve palindrom-dışı regresyon testi.
