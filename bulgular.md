@@ -80,11 +80,13 @@ Kuantum karşılaştırıcılar tam sayı bitleriyle çalıştığı için tüm 
   - `alcohol`: dosyada 14 ondalıklı float artıkları var (`11.066666666666666` gibi devirli sayı kayıtları). 2 ondalığa yuvarlama kayıpsız çözüm oldu (112 farklı değerin 111'i korunuyor).
   - `density`: bilgisi 3.-5. ondalıkta yaşıyor; 2 ondalıkta sütun anlamını yitiriyor (998 farklı değer 4'e düşüyor). Doğru hassasiyet 4 ondalık (156 farklı değer korunuyor).
 
-Pandas tarafında ölçek katsayılarını quantize işleminin yapıldığı satırda `olcek` sözlüğüne kaydettim; sorgu değerlerini insan birimleriyle yazıp (`7.3` gibi) çeviriyi `q()` yardımcı fonksiyonuna bıraktım. Fonksiyon içindeki `assert v.bit_length() <= genislik[col]` kontrolü, sütuna sığmayan sorgu değerlerini Q#'a gitmeden Python tarafında okunur bir mesajla yakalıyor.
+Pandas tarafında ölçek katsayılarını quantize işleminin yapıldığı satırda `scale` sözlüğüne kaydettim; sorgu değerlerini insan birimleriyle yazıp (`7.3` gibi) çeviriyi `q()` yardımcı fonksiyonuna bıraktım. Fonksiyon içindeki `assert v.bit_length() <= weight[col]` kontrolü, sütuna sığmayan sorgu değerlerini Q#'a gitmeden Python tarafında okunur bir mesajla yakalıyor.
 
 ## 9. Bilinmeyen Çözüm Sayısı (M) ve BBHT Algoritması
 
-Grover iterasyon formülü `round(pi/4 * sqrt(N/M))` içindeki M (sorguyu sağlayan gerçek satır sayısı), çalışma zamanında gelen sorguya bağlı olduğu için derleme zamanında bilinemez. Projede M=1 (tek eşleşme) varsaydım.
+Grover iterasyon formülü `floor(pi/4 * sqrt(N/M))` içindeki M (sorguyu sağlayan gerçek satır sayısı), çalışma zamanında gelen sorguya bağlı olduğu için derleme zamanında bilinemez. Önce M=1 (tek eşleşme) varsaydım; sonra M'yi `expectedMatches` adıyla operasyon parametresi yaptım: kullanıcı kaç eşleşme beklediğini tahmin olarak veriyor, cevabı pandas ile sayıp göndermiyorum (o zaman aramanın anlamı kalmazdı). Yanlış tahmin sonucu bozmaz, sadece olasılığı düşürür.
+
+**Yuvarlama bulgusu:** Formülü önce `Round` ile yazmıştım; M=2, N=8 durumunda pi/4 * sqrt(4) = 1,57 değeri 2 tura yuvarlanıyor ve genlik tepe noktasını aşıyordu (teorik basari 2 turda %25, 1 turda %100). `Floor` ile 1 tur atılıyor ve ölçüm 50/50 iki eşleşmeye yığılıyor. Literatürdeki formülün tabanı da `Floor`.
 
 **Kaynak:** Boyer, Brassard, Hoyer, Tapp, ["Tight Bounds on Quantum Searching"](https://arxiv.org/abs/quant-ph/9605034) (1996), Bölüm 4.
 
@@ -153,7 +155,7 @@ Beklenen toplam iterasyon M bilinmeden de O(sqrt(N/M)) mertebesinde kalıyor. An
 
 %98 olasılıkla indeks 7. Aynı sorgunun pandas kontrolü de `[7]` döndürdü: kuantum ve klasik cevap örtüşüyor. Rastgele seçim tabanı %1,6 olurdu; 6 iterasyonluk amplifikasyonun teorik beklentisi (~%99) ile ölçüm uyumlu. QROM + karşılaştırıcı + faz kickback + diffuser + iterasyon hesabı zincirini uçtan uca doğruladım.
 
-**Tespit ettiğim gizli tuzak, sütun bit sırası (endianness):** `satir_to_bits` sütun değerlerini MSB-first yazıyor; `ApplyControlledOnInt` ise dilimi little-endian okuyor. Yani karşılaştırıcı aslında sorgu değerinin bit-tersini arıyor. Bu deneyde sonuç etkilenmedi çünkü 73 (`1001001`) ve 7 (`111`) ikili palindrom. Düzeltme: `satir_to_bits` içinde `reversed(ikili_string)` kullanmak; ardından palindrom olmayan bir değerle regresyon testi yapılmalı. (Henüz uygulamadım, bekleyen tek iş.)
+**Tespit ettiğim ve kapattığım gizli tuzak, sütun bit sırası (endianness):** `row_to_bits` sütun değerlerini MSB-first yazıyordu; `ApplyControlledOnInt` ise dilimi little-endian okur. Yani karşılaştırıcı aslında sorgu değerinin bit-tersini arıyordu. İlk deneylerde sonuç etkilenmedi çünkü 73 (`1001001`) ve 7 (`111`) ikili palindrom. Hatayı gerçek bir test yakaladı: OR sorgusuna 112 (`1110000`, palindrom değil) değerini verdiğimde devre onu little-endian okuyup 7 sandı ve satırı hiç işaretlemedi. Düzeltme: `row_to_bits` içinde `reversed(binary_str)`; sonrasında 112'li regresyon testi doğru satırı buldu.
 
 **Quantinuum testleri:**
 
@@ -162,9 +164,26 @@ Beklenen toplam iterasyon M bilinmeden de O(sqrt(N/M)) mertebesinde kalıyor. An
 - `shots=10` (~112 eHQC) ile çalıştı; kuyruk + çalıştırma toplamı yaklaşık 1 saat sürdü (hedefin ilan ettiği ortalama kuyruk 53-72 dakika aralığındaydı). **Sonuç: düz histogram** `{001:0.1, 011:0.2, 100:0.2, 111:0.2, 000:0.2, 110:0.1}`; beklenen `[1,1,1]` (indeks 7) tepesi yok.
 - **Sebep (beklenen NISQ gerçeği):** `h2-1e` gerçekçi H2 gürültü modeli kullanıyor. 601 ccx yaklaşık 5.000 iki-kübit kapıya ayrışıyor; ~%99,8 kapı sadakatiyle başarı olasılığı 0,998^5000 = ~5x10^-5, sinyal tamamen gürültüde eriyor. Bölüm 5'teki Grand Challenges gürültü tablosunun deneysel doğrulaması: QROM tabanlı Grover bu derinlikte NISQ donanımında pratik değil ve bunu kendi deneyimle doğrulamış oldum.
 
-## 13. Sonuç: Neyi Çözdüm
+## 13. Mantıksal Operatörler: AND/OR Desteği
 
-Bu projede şu problemi çözdüm: **kullanıcının çalışma zamanında verdiği çok koşullu bir sorguyu (sütun, operatör, değer üçlüleri; ==, !=, >, <, >=, <= destekli) kuantum devresi içinde değerlendirip, eşleşen gözlemin indeksini Grover araması ile bulan ve satırın tamamını pandas ile geri getiren, gerçek bir veri seti üzerinde çalışan uçtan uca bir sistem kurdum.** Cevabı önceden devreye gömen "database search" demolarının aksine, arama gerçekten devre içinde yapılıyor: veri QROM ile yükleniyor, koşullar kübitler üzerinde karşılaştırılıyor, indeks ölçümle bulunuyor.
+Sorgu listesine birden çok koşul koyduğumda bunların VE mi VEYA mı davrandığını başta hiç düşünmemiştim; sorgulayınca yapının örtük olarak VE davrandığını fark ettim (marker, çok kontrollü X nedeniyle ancak tüm aux kübitleri 1 iken çevriliyor). Bunun üzerine formatı, mantıksal operatörü açıkça taşıyacak şekilde genişlettim: `(mantıksal operatör, [karşılaştırma listesi])`, Q# tipi `(Int, (Int, Int, Int, Int)[])`. 0 = AND (tüm koşullar sağlanmalı), 1 = OR (en az biri sağlanmalı). Python tuple Q# tuple'a, Python listesi Q# dizisine eşlendiği için dış yapının tuple olması zorunlu.
+
+- **AND:** aux kübitleri üzerinde çok kontrollü X (`Controlled X(auxs, marker)`); yalnız tüm aux'lar 1 iken marker çevrilir.
+- **OR (De Morgan):** "en az biri 1" = "hepsi 0 DEĞİL". Aux'lar X ile ters çevrilip çok kontrollü X uygulanır (NOR), sondaki koşulsuz X NOR'u OR'a tamamlar. Koşulsuz X'in |-> üzerindeki etkisi genel faz olduğu için sonucu bozmaz.
+- **XOR tuzağı:** OR'u iki karşılaştırmayı ayni aux'a yazarak yapmak yanlıştır; iki koşul ayni satırda ayni anda doğruysa aux iki kez çevrilip 0'a döner (OR değil XOR). Doğru yol karşılaştırma başına ayrı aux + De Morgan.
+- **Sınır:** Yapı tek seviyeli; "a AND (b OR c)" gibi karışık ifade için gruplar listesi (CNF: grup içi OR, gruplar arası AND) gerekir. Q#'ta özyinelemeli tip olmadığı için keyfi derinlik zaten mümkün değil.
+
+**Doğrulama (yerel, 8 satır, 100 shot):**
+
+- AND (`fixed acidity == 7.3 VE quality >= 7`): pandas `[7]`, Grover %95-98 indeks 7.
+- OR, M=1 (`fixed acidity == 11.2 VEYA quality == 4`): pandas `[3]`, Grover %91 indeks 3.
+- OR, M=2 (`fixed acidity == 11.2 VEYA quality >= 7`): pandas `[3, 7]`; `expectedMatches=2` ile Grover tam 50/50 `[3, 7]`. Ayni sorgu `expectedMatches=1` ile düz dağılım verdi: souffle probleminin (Bölüm 9) kendi devremdeki deneysel gözlemi. OR birden çok eşleşme üretmeye yatkın olduğu için M tahmini OR ile birlikte daha da önemli hale geldi.
+
+Bu çalışma iki hatayı da yakaladı: 112 değeri endianness tuzağını görünür kıldı (Bölüm 12) ve M=2 senaryosu iterasyon formülündeki Round/Floor farkını ortaya çıkardı (Bölüm 9).
+
+## 14. Sonuç: Neyi Çözdüm
+
+Bu projede şu problemi çözdüm: **kullanıcının çalışma zamanında verdiği çok koşullu bir sorguyu (sütun, operatör, değer üçlüleri; ==, !=, >, <, >=, <= karşılaştırmaları ve AND/OR mantıksal operatörleri destekli) kuantum devresi içinde değerlendirip, eşleşen gözlemin indeksini Grover araması ile bulan ve satırın tamamını pandas ile geri getiren, gerçek bir veri seti üzerinde çalışan uçtan uca bir sistem kurdum.** Cevabı önceden devreye gömen "database search" demolarının aksine, arama gerçekten devre içinde yapılıyor: veri QROM ile yükleniyor, koşullar kübitler üzerinde karşılaştırılıyor, indeks ölçümle bulunuyor.
 
 Bu süreçte çözdüğüm somut alt problemler:
 
@@ -173,8 +192,9 @@ Bu süreçte çözdüğüm somut alt problemler:
 3. 134 kübitlik tasarımı, "QROM'a sadece sorgulanan sütunlar" kararıyla 24 kübite indirip derlenebilir ve çalıştırılabilir hale getirdim.
 4. Yerel simülatörde %98 doğrulukla, klasik kontrolle örtüşen uçtan uca sonucu ürettim.
 5. Bulut tarafında Rigetti QVM'in servis hatasını, Quantinuum'un hacim bazlı reddini, eHQC kota modelini ve gürültü modelli emülatörde sinyalin erimesini deneylerle belgeledim.
+6. Sorgu formatına AND/OR mantıksal operatörlerini ekledim (OR için De Morgan yapısı); bu genişletme sırasında endianness tuzağını `reversed()` yamasıyla, iterasyon formülündeki Round hatasını `Floor` düzeltmesiyle kapattım ve M'yi kullanıcı tahmini olarak parametreye çevirdim.
 
-Genel çıkarım: Mekanizma doğru ve ideal simülatörde kanıtlandı; ancak QROM'un O(N) yükleme maliyeti ve NISQ gürültüsü, bu yaklaşımın bugünkü donanımda pratik hız kazancı sunmasını engelliyor. Bu sınır literatürde öngörülüyordu; ben de kendi devremde deneysel olarak doğruladım. Bekleyen tek düzeltme: sütun bit sırası (endianness) için `reversed()` yaması ve palindrom olmayan değerle regresyon testi.
+Genel çıkarım: Mekanizma doğru ve ideal simülatörde kanıtlandı; ancak QROM'un O(N) yükleme maliyeti ve NISQ gürültüsü, bu yaklaşımın bugünkü donanımda pratik hız kazancı sunmasını engelliyor. Bu sınır literatürde öngörülüyordu; ben de kendi devremde deneysel olarak doğruladım. Daha önce açık bıraktığım endianness düzeltmesi de uygulandı ve palindrom olmayan değerle (112) regresyon testinden geçti; bekleyen düzeltme kalmadı.
 
 ---
 
@@ -260,11 +280,13 @@ Quantum comparators work with integer bits. So I scanned every column in the rea
   - `alcohol`: the file has float noise with 14 decimals (records like `11.066666666666666`). Rounding to 2 decimals fixed it without loss (111 of 112 different values stayed).
   - `density`: its information lives in decimals 3 to 5. With 2 decimals the column dies (998 different values become 4). The right choice is 4 decimals (156 different values stay).
 
-In pandas, I saved the scale factors in a dictionary called `olcek`, on the same line where I quantize. I write query values in normal units (like `7.3`). A small helper function `q()` does the conversion. Inside it, `assert v.bit_length() <= genislik[col]` stops values that do not fit the column. The error appears in Python, with a clear message, before anything goes to Q#.
+In pandas, I saved the scale factors in a dictionary called `scale`, on the same line where I quantize. I write query values in normal units (like `7.3`). A small helper function `q()` does the conversion. Inside it, `assert v.bit_length() <= weight[col]` stops values that do not fit the column. The error appears in Python, with a clear message, before anything goes to Q#.
 
 ## 9. Unknown Number of Solutions (M) and the BBHT Algorithm
 
-The Grover iteration formula is `round(pi/4 * sqrt(N/M))`. Here M is the number of rows that match the query. The query comes at runtime, so M is unknown at compile time. I used M=1 (one match) in this project.
+The Grover iteration formula is `floor(pi/4 * sqrt(N/M))`. Here M is the number of rows that match the query. The query comes at runtime, so M is unknown at compile time. First I used a fixed M=1. Later I made M a parameter called `expectedMatches`. The user gives a guess for the number of matches. I do not count the answer with pandas and send it (then the search would have no meaning). A wrong guess does not break the result. It only lowers the probability.
+
+**A rounding finding:** At first I wrote the formula with `Round`. For M=2 and N=8, the value pi/4 * sqrt(4) = 1.57 was rounded up to 2 turns. Two turns push the amplitude past its best point (theory: 25% at 2 turns, 100% at 1 turn). With `Floor` the circuit makes 1 turn, and the measurement lands 50/50 on the two matches. The formula in the literature also uses `Floor`.
 
 **Source:** Boyer, Brassard, Hoyer, Tapp, ["Tight Bounds on Quantum Searching"](https://arxiv.org/abs/quant-ph/9605034) (1996), Section 4.
 
@@ -333,7 +355,7 @@ My 24-qubit circuit fits every target. The Rigetti failure is a service problem,
 
 Index 7 came out in 98% of the shots. The pandas check for the same query also returned `[7]`. So the quantum answer and the classical answer agree. A random guess would give 1.6%. The theory says about 99% after 6 iterations, and the measurement matches it. The full chain worked: QROM + comparator + phase kickback + diffuser + iteration count.
 
-**A hidden trap I found, the column bit order (endianness):** `satir_to_bits` writes column values MSB-first. But `ApplyControlledOnInt` reads the slice little-endian. So the comparator really searches for the reversed bits of the query value. My test was safe by luck: 73 (`1001001`) and 7 (`111`) read the same in both directions (palindromes). The fix: use `reversed(ikili_string)` inside `satir_to_bits`, then test again with a non-palindrome value. (I did not apply it yet. It is the only open item.)
+**A hidden trap I found and closed, the column bit order (endianness):** `row_to_bits` wrote column values MSB-first. But `ApplyControlledOnInt` reads the slice little-endian. So the comparator really searched for the reversed bits of the query value. My first tests were safe by luck: 73 (`1001001`) and 7 (`111`) read the same in both directions (palindromes). A real test caught the bug: I gave the value 112 (`1110000`, not a palindrome) in an OR query. The circuit read it little-endian, saw 7, and never marked the row. The fix: `reversed(binary_str)` inside `row_to_bits`. After the fix, the regression test with 112 found the correct row.
 
 **The Quantinuum tests:**
 
@@ -342,9 +364,26 @@ Index 7 came out in 98% of the shots. The pandas check for the same query also r
 - With `shots=10` (about 112 eHQC) it ran. Queue plus run took about 1 hour (the advertised average queue was 53-72 minutes). **Result: a flat histogram** `{001:0.1, 011:0.2, 100:0.2, 111:0.2, 000:0.2, 110:0.1}`. The expected peak at `[1,1,1]` (index 7) is not there.
 - **Why (the expected NISQ reality):** `h2-1e` uses a realistic noise model of the H2 machine. My 601 ccx become about 5,000 two-qubit gates. With 99.8% gate quality, the success chance is 0.998^5000, which is about 5x10^-5. The signal fully disappears into noise. This confirms the noise table from Section 5 by experiment: QROM based Grover at this depth is not practical on NISQ hardware. I saw it with my own circuit.
 
-## 13. Conclusion: What I Solved
+## 13. Logical Operators: AND/OR Support
 
-In this project I solved this problem: **I built a working end-to-end system on a real dataset. The user gives a multi-condition query at runtime (column, operator, value; with ==, !=, >, <, >=, <=). The quantum circuit checks the conditions inside itself. Grover search finds the index of the matching row. Then pandas returns the full row.** This is different from the usual "database search" demos, which put the answer into the circuit before the search. Here the search really happens in the circuit: QROM loads the data, the conditions are compared on qubits, and the measurement finds the index.
+At first I did not think about one question: when I put many conditions into the query list, do they act as AND or as OR? When I looked into it, I saw that the structure was an implicit AND (the marker flips only when all aux qubits are 1, because of the multi-controlled X). So I made the query format carry the logical operator in an explicit way. It now supports one level of logical operators: `(logical operator, [comparison list])`. The Q# type is `(Int, (Int, Int, Int, Int)[])`. 0 = AND (all conditions must hold), 1 = OR (at least one must hold). The outer part must be a tuple: a Python tuple maps to a Q# tuple, and a Python list maps to a Q# array.
+
+- **AND:** a multi-controlled X on the aux qubits (`Controlled X(auxs, marker)`). The marker flips only when all aux qubits are 1.
+- **OR (De Morgan):** "at least one is 1" = "NOT all are 0". I flip the aux qubits with X, apply the multi-controlled X (this gives NOR), and one extra X turns NOR into OR. The extra X acts on |-> as a global phase, so it does not hurt the result.
+- **The XOR trap:** Do not build OR by writing two comparisons into the same aux qubit. If both conditions are true for the same row, the aux flips two times and goes back to 0. That is XOR, not OR. The correct way: one aux per comparison, then De Morgan.
+- **The limit:** The format has one level only. A mixed formula like "a AND (b OR c)" needs a list of groups (CNF: OR inside a group, AND between groups). Q# has no recursive types, so deeper nesting is not possible anyway.
+
+**Validation (local, 8 rows, 100 shots):**
+
+- AND (`fixed acidity == 7.3 AND quality >= 7`): pandas `[7]`, Grover 95-98% on index 7.
+- OR, M=1 (`fixed acidity == 11.2 OR quality == 4`): pandas `[3]`, Grover 91% on index 3.
+- OR, M=2 (`fixed acidity == 11.2 OR quality >= 7`): pandas `[3, 7]`. With `expectedMatches=2`, Grover gave exactly 50/50 on `[3, 7]`. The same query with `expectedMatches=1` gave a flat histogram. This is the souffle problem (Section 9), seen in my own circuit. OR can easily match many rows, so the M guess matters even more with OR.
+
+This work caught two bugs at the same time: the value 112 showed the endianness trap (Section 12), and the M=2 case showed the Round/Floor mistake in the iteration formula (Section 9).
+
+## 14. Conclusion: What I Solved
+
+In this project I solved this problem: **I built a working end-to-end system on a real dataset. The user gives a multi-condition query at runtime (column, operator, value; with ==, !=, >, <, >=, <=, and the logical operators AND/OR). The quantum circuit checks the conditions inside itself. Grover search finds the index of the matching row. Then pandas returns the full row.** This is different from the usual "database search" demos, which put the answer into the circuit before the search. Here the search really happens in the circuit: QROM loads the data, the conditions are compared on qubits, and the measurement finds the index.
 
 The concrete problems I solved on the way:
 
@@ -353,5 +392,6 @@ The concrete problems I solved on the way:
 3. I reduced the design from 134 qubits to 24 qubits with one decision: only queried columns go into QROM. This made the circuit compile and run.
 4. I got the end-to-end result on the local simulator: 98% correct, and equal to the classical check.
 5. On the cloud side I documented, with experiments: the Rigetti QVM service failure, Quantinuum's size-based rejection, the eHQC quota model, and the loss of the signal on the noise emulator.
+6. I added the logical operators AND/OR to the query format (with a De Morgan circuit for OR). This work also closed the endianness trap with the `reversed()` fix, fixed the Round mistake in the iteration formula with `Floor`, and turned M into a user-guess parameter.
 
-Overall: The mechanism is correct, and I proved it on an ideal simulator. But QROM's O(N) loading cost and NISQ noise stop this approach from giving a real speedup on today's hardware. The literature predicted this limit; I confirmed it with my own circuit. One item stays open: the `reversed()` fix for the column bit order (endianness), plus a new test with a non-palindrome value.
+Overall: The mechanism is correct, and I proved it on an ideal simulator. But QROM's O(N) loading cost and NISQ noise stop this approach from giving a real speedup on today's hardware. The literature predicted this limit; I confirmed it with my own circuit. The endianness fix that was open before is now applied and tested with a non-palindrome value (112). No open items remain.

@@ -10,7 +10,7 @@ Grover Arama Algoritmasını oyuncak örneklerin ötesine taşıyıp gerçek bir
 
 1. **Ön işleme (Python/pandas):** Veri seti 2^n satıra kırpılır (Grover Dilemma, Type A'dan kaçınmak için), sütunlar tam sayıya quantize edilir, her satır sabit genişlikte bit dizisine çevrilir.
 2. **QROM (Q#):** Veri seti, indekse koşullu kontrollü kapılarla devreye gömülür; sorgulanan sütunlar kübitlere yüklenir.
-3. **Sorgu oracle'ı (Q#):** (offset, genişlik, operatör, değer) dörtlüleri çalışma zamanında gönderilir; ==, !=, >, <, >=, <= operatörleri devre içinde değerlendirilir ve eşleşen indeksin fazı işaretlenir.
+3. **Sorgu oracle'ı (Q#):** (offset, genişlik, operatör, değer) dörtlüleri çalışma zamanında gönderilir; ==, !=, >, <, >=, <= karşılaştırmaları devre içinde değerlendirilir ve eşleşen indeksin fazı işaretlenir. Koşullar VE veya VEYA ile bağlanabilir: ilk sürümde yapının örtük olarak VE davrandığını fark ettim ve formatı açık mantıksal operatör (AND/OR; OR için De Morgan devresi) taşıyacak şekilde düzelttim.
 4. **Grover döngüsü:** Oracle + diffuser, pi/4 * sqrt(N/M) kez tekrarlanır; ölçüm eşleşen satırın indeksini döndürür.
 5. **Sonuç:** Python, ölçülen indeksi pandas.iloc ile gerçek satıra çevirir.
 
@@ -64,7 +64,7 @@ Taking Grover's Search Algorithm beyond toy examples: running a multi-condition 
 
 1. **Preprocessing (Python/pandas):** The dataset is trimmed to 2^n rows (to avoid the Type A Grover Dilemma), columns are quantized to integers, and each row is converted into a fixed-width bit array.
 2. **QROM (Q#):** The dataset is embedded into the circuit with index-conditioned controlled gates; queried columns are loaded onto qubits.
-3. **Query oracle (Q#):** (offset, width, operator, value) tuples are passed at runtime; the operators ==, !=, >, <, >=, <= are evaluated in-circuit and the phase of the matching index is marked.
+3. **Query oracle (Q#):** (offset, width, operator, value) tuples are passed at runtime; the comparisons ==, !=, >, <, >=, <= are evaluated in-circuit and the phase of the matching index is marked. Conditions can be joined with AND or OR: I noticed that the first version behaved as an implicit AND, and I fixed the format so it carries an explicit logical operator (AND/OR; a De Morgan circuit for OR).
 4. **Grover loop:** Oracle + diffuser repeated pi/4 * sqrt(N/M) times; measurement returns the index of the matching row.
 5. **Result:** Python maps the measured index back to the actual row via pandas.iloc.
 

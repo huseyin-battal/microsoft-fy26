@@ -5,12 +5,16 @@ namespace Main {
     import Std.Canon.*;
     import Std.Measurement.*;
 
-    operation GroverSearchAlgorithm(queries : (Int, Int, Int, Int)[], dataset : Bool[][]) : Result[] {
-        // GİRDİ: (offset, genislik, operatör, deger)
+    operation GroverSearchAlgorithm(queries : (Int, (Int, Int, Int, Int)[]), dataset : Bool[][], expectedMatches : Int) : Result[] {
+        // GİRDİ: (mantıksal operatör, karşılaştırma listesi)
+        // mantıksal operatör: 0 = AND (hepsi sağlanmalı), 1 = OR (en az biri sağlanmalı)
+        // her karşılaştırma: (offset, genislik, operatör, deger)
+        // expectedMatches: kullanıcının beklediği eşleşme sayısı tahmini (M). Tur sayısını belirler;
+        // yanlış tahmin aşırı/eksik dönmeye (souffle) yol açar ama sonucu bozmaz, sadece olasılığı düşürür.
         let rowBitSize = BitSizeI(Length(dataset) - 1); // Satır kübitleri, verisetinin satır indislerinden türetilir: 8 satır → 3, 4096 satır → 12
         let colBitSize = Length(dataset[0]); // Sütun kübitleri, her satırın sahip olduğu bit-uzunluğundan belirlenir. 
         let rowsCount = IntAsDouble(2^rowBitSize); // Toplam satır sayısı
-        let M = 1.0; // beklenen sonuç adedi 1 olarak belirledik.
+        let M = IntAsDouble(MaxI(1, expectedMatches)); // beklenen sonuç adedi parametreden gelir; 0 veya negatif verilirse 1'e sabitlenir.
         use rowQubits = Qubit[rowBitSize]; // 8 satır -> 3 kübit.
         use columnQubits = Qubit[colBitSize]; // colBitSize adet kübit.
         
@@ -21,8 +25,10 @@ namespace Main {
         
         // Grover Algoritma'sının istenen sonuçları bulabilmesi için tur sayısı formülü tanımlıyoruz.  
         // KAYNAK: BBHT: Boyer, Brassard, Høyer, Tapp, "Tight Bounds on Quantum Searching" (1996/98)
-        let iterationCount = Round((PI() / 4.0) * (Sqrt(rowsCount / M))); // M=1 ise dönecek sonuç bellidir. Üstel arama kullanmadık.
-        // 2,2214414690791831235079404950303 = 2 tur saysı.
+        // DİKKAT: Floor kullanıyoruz, Round değil. Ornek: M=2, N=8 icin pi/4 * sqrt(4) = 1.57;
+        // Round 2 tura yuvarlar ve tepe noktasini asar (souffle), Floor ile 1 tur atilir ve olasilik maksimumda kalir.
+        let iterationCount = Floor((PI() / 4.0) * (Sqrt(rowsCount / M))); // Üstel arama (BBHT) kullanmadık; M tahmini parametreden gelir.
+        // M=1, N=8 ornegi: pi/4 * sqrt(8) = 2.22 -> 2 tur.
         
         // GROVER ALGORİTMASI
         ApplyToEach(H, rowQubits);
@@ -71,14 +77,15 @@ namespace Main {
         }
     }
 
-    operation CompareToQuery(columnQubits : Qubit[], queries : (Int, Int, Int, Int)[], marker : Qubit) : Unit is Adj + Ctl {
-        use auxs = Qubit[Length(queries)]; // 2 sorgu betiği belirledik. Liste şeklinde 2 adet kübit'i dummy olarak ayarladık.
+    operation CompareToQuery(columnQubits : Qubit[], queries : (Int, (Int, Int, Int, Int)[]), marker : Qubit) : Unit is Adj + Ctl {
+        let (logicalOp, comparisons) = queries; // logicalOp: 0 = AND, 1 = OR
+        use auxs = Qubit[Length(comparisons)]; // her karşılaştırma için bir yardımcı (aux) kübit.
         within {
-            for i in 0..Length(queries)-1 {
-                // OPS = {"==": 0, ">": 1, "<": 2, ">=": 3, "<=": 4, "!=":5}
+            for i in 0..Length(comparisons)-1 {
+                // COMP_OPS = {"==": 0, ">": 1, "<": 2, ">=": 3, "<=": 4, "!=":5}
                 // Eşitsizlikler: koşulu sağlayan her klasik değer için ayrı pattern eşleşmesi.
                 // Taban durumda en fazla biri tetiklenir, bu yüzden aux tam "koşul sağlanıyorsa" çevrilir.
-                let (offset, weight, operator, value) = queries[i];
+                let (offset, weight, operator, value) = comparisons[i];
                 
                 // .ipynb dosyasında tanımladığımız weight ve offset değişkenleri ile her sütuna karşılık gelen bit-genişliğine
                 // göre ona karşılık gelen kübitler seçilir ve "slice" olarak adlandırılır. 
@@ -123,8 +130,21 @@ namespace Main {
                 }
             }
         } apply {
-            // SON AŞAMA: auxs dummy'leri ile işaretlenen durumlar, marker'a işlenmek için CCNOT'a gönderilir.
-            Controlled X(auxs, marker);
+            // SON AŞAMA: aux'lardaki koşul sonuçları mantıksal operatöre göre marker'a işlenir.
+            if logicalOp == 0 {
+                // AND: tüm aux'lar 1 ise marker çevrilir (çok kontrollü X).
+                Controlled X(auxs, marker);
+            } else {
+                // OR (De Morgan): "en az biri 1" = "hepsi 0 DEĞİL".
+                // Aux'lar ters çevrilip çok kontrollü X uygulanır: marker yalnız hepsi 0 iken çevrilmiş olur (NOR).
+                // Sondaki koşulsuz X, NOR'u OR'a tamamlar; |−⟩ üzerindeki etkisi genel faz olduğu için sonucu bozmaz.
+                within {
+                    ApplyToEachA(X, auxs);
+                } apply {
+                    Controlled X(auxs, marker);
+                }
+                X(marker);
+            }
         }
 
 
